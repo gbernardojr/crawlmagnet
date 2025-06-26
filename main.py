@@ -7,17 +7,16 @@ import pandas as pd
 from datetime import datetime
 
 # Configuração da página
-st.set_page_config(page_title="SEO Analyzer", page_icon="🔍", layout="wide")
-st.title("🔍 Analisador de Sitemap.xml e Robots.txt")
+st.set_page_config(page_title="SEO Analyzer Pro", page_icon="🔍", layout="wide")
+st.title("🔍 Analisador Avançado de Sitemap.xml e Robots.txt")
 
 # Sidebar com informações
 st.sidebar.header("Sobre")
 st.sidebar.info("""
-Esta ferramenta analisa arquivos sitemap.xml e robots.txt de sites, fornecendo:
-- Estrutura do site
-- Bloqueios de rastreamento
-- Problemas potenciais de SEO
-- Recomendações de otimização
+Esta ferramenta analisa arquivos sitemap.xml e robots.txt de sites, incluindo:
+- Detecção automática de sitemaps indexados
+- Análise hierárquica de múltiplos sitemaps
+- Diagnóstico completo de bloqueios e estrutura
 """)
 
 def is_valid_url(url):
@@ -55,23 +54,19 @@ def parse_robots_txt(content):
     for line in content.split('\n'):
         line = line.strip()
         
-        # Ignorar linhas vazias
         if not line:
             continue
             
-        # Comentários
         if line.startswith('#'):
             data['comments'].append(line[1:].strip())
             continue
             
-        # User-agent
         if line.lower().startswith('user-agent:'):
             current_ua = line[11:].strip()
             if current_ua not in data['user_agents']:
                 data['user_agents'][current_ua] = {'disallow': [], 'allow': []}
             continue
             
-        # Disallow
         if line.lower().startswith('disallow:'):
             path = line[9:].strip()
             if path and current_ua in data['user_agents']:
@@ -79,7 +74,6 @@ def parse_robots_txt(content):
                 data['disallowed'].append(path)
             continue
             
-        # Allow
         if line.lower().startswith('allow:'):
             path = line[6:].strip()
             if path and current_ua in data['user_agents']:
@@ -87,13 +81,11 @@ def parse_robots_txt(content):
                 data['allowed'].append(path)
             continue
             
-        # Sitemap
         if line.lower().startswith('sitemap:'):
             sitemap_url = line[8:].strip()
             data['sitemaps'].append(sitemap_url)
             continue
             
-        # Crawl-delay
         if line.lower().startswith('crawl-delay:'):
             delay = line[12:].strip()
             data['crawl_delay'] = delay
@@ -103,14 +95,15 @@ def parse_robots_txt(content):
 
 def fetch_sitemap(sitemap_url):
     try:
-        response = requests.get(sitemap_url, timeout=10)
+        response = requests.get(sitemap_url, timeout=15)
         if response.status_code == 200:
             return response.content
         return None
-    except:
+    except Exception as e:
+        st.warning(f"Erro ao acessar {sitemap_url}: {str(e)}")
         return None
 
-def parse_sitemap(content):
+def parse_sitemap(content, original_url=None):
     if not content:
         return None
     
@@ -118,68 +111,103 @@ def parse_sitemap(content):
     try:
         root = ET.fromstring(content)
     except ET.ParseError:
-        # Pode ser um sitemap index
         try:
             soup = BeautifulSoup(content, 'xml')
             if soup.find('sitemapindex'):
-                return {'type': 'index', 'sitemaps': [loc.text for loc in soup.find_all('loc')]}
-        except:
+                sitemaps = [loc.text for loc in soup.find_all('loc')]
+                return {
+                    'type': 'index',
+                    'sitemaps': sitemaps,
+                    'source': original_url or 'Direct'
+                }
+            elif soup.find('urlset'):
+                urls = []
+                for url in soup.find_all('url'):
+                    url_data = {
+                        'loc': url.find('loc').text if url.find('loc') else None,
+                        'lastmod': url.find('lastmod').text if url.find('lastmod') else None,
+                        'changefreq': url.find('changefreq').text if url.find('changefreq') else None,
+                        'priority': url.find('priority').text if url.find('priority') else None
+                    }
+                    urls.append(url_data)
+                return {
+                    'type': 'regular',
+                    'urls': urls,
+                    'source': original_url or 'Direct'
+                }
+        except Exception as e:
+            st.warning(f"Erro ao analisar sitemap: {str(e)}")
             return None
     
-    # Verificar se é um sitemap regular
-    urls = []
-    namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-    
-    for url in root.findall('ns:url', namespace):
-        url_data = {
-            'loc': url.find('ns:loc', namespace).text if url.find('ns:loc', namespace) is not None else None,
-            'lastmod': url.find('ns:lastmod', namespace).text if url.find('ns:lastmod', namespace) is not None else None,
-            'changefreq': url.find('ns:changefreq', namespace).text if url.find('ns:changefreq', namespace) is not None else None,
-            'priority': url.find('ns:priority', namespace).text if url.find('ns:priority', namespace) is not None else None
-        }
-        urls.append(url_data)
-    
-    if urls:
-        return {'type': 'regular', 'urls': urls}
+    # Parsear como sitemap regular
+    try:
+        namespace = {'ns': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+        urls = []
+        
+        for url in root.findall('ns:url', namespace):
+            url_data = {
+                'loc': url.find('ns:loc', namespace).text if url.find('ns:loc', namespace) is not None else None,
+                'lastmod': url.find('ns:lastmod', namespace).text if url.find('ns:lastmod', namespace) is not None else None,
+                'changefreq': url.find('ns:changefreq', namespace).text if url.find('ns:changefreq', namespace) is not None else None,
+                'priority': url.find('ns:priority', namespace).text if url.find('ns:priority', namespace) is not None else None
+            }
+            urls.append(url_data)
+        
+        if urls:
+            return {
+                'type': 'regular',
+                'urls': urls,
+                'source': original_url or 'Direct'
+            }
+    except:
+        pass
     
     return None
+
+def get_all_sitemap_urls(sitemap_data):
+    all_urls = []
+    
+    if sitemap_data['type'] == 'regular':
+        return sitemap_data['urls']
+    elif sitemap_data['type'] == 'index':
+        for sitemap_url in sitemap_data['sitemaps']:
+            content = fetch_sitemap(sitemap_url)
+            if content:
+                parsed = parse_sitemap(content, sitemap_url)
+                if parsed and parsed['type'] == 'regular':
+                    all_urls.extend(parsed['urls'])
+    
+    return all_urls
 
 def analyze_seo(robots_data, sitemap_data):
     recommendations = []
     warnings = []
     insights = []
     
-    # Análise do robots.txt
     if robots_data:
-        # Verificar bloqueios importantes
         important_paths = ['/css/', '/js/', '/img/', '/assets/']
         for path in important_paths:
             if any(path in disallowed for disallowed in robots_data['disallowed']):
                 warnings.append(f"⚠️ Bloqueio potencialmente problemático: {path} (pode afetar renderização)")
         
-        # Verificar sitemaps
         if not robots_data['sitemaps']:
             recommendations.append("✅ Adicionar diretiva Sitemap no robots.txt")
         else:
             insights.append(f"🔗 Sitemaps encontrados: {len(robots_data['sitemaps'])}")
         
-        # Verificar crawl delay
         if robots_data['crawl_delay']:
             insights.append(f"⏱ Crawl delay definido: {robots_data['crawl_delay']}")
     
-    # Análise do sitemap
     if sitemap_data:
         if sitemap_data['type'] == 'regular':
             urls = sitemap_data['urls']
-            insights.append(f"📊 Total de URLs no sitemap: {len(urls)}")
+            insights.append(f"📊 URLs no sitemap principal: {len(urls)}")
             
-            # Verificar prioridades
             priorities = [float(url['priority']) for url in urls if url['priority']]
             if priorities:
                 avg_priority = sum(priorities) / len(priorities)
                 insights.append(f"⚖️ Prioridade média: {avg_priority:.2f}")
             
-            # Verificar lastmod
             lastmod_dates = [url['lastmod'] for url in urls if url['lastmod']]
             if lastmod_dates:
                 try:
@@ -190,7 +218,6 @@ def analyze_seo(robots_data, sitemap_data):
                 except:
                     pass
             
-            # Verificar changefreq
             changefreqs = [url['changefreq'] for url in urls if url['changefreq']]
             if changefreqs:
                 freq_counts = pd.Series(changefreqs).value_counts()
@@ -199,7 +226,18 @@ def analyze_seo(robots_data, sitemap_data):
                     insights.append(f"   - {freq}: {count} URLs")
         
         elif sitemap_data['type'] == 'index':
-            insights.append(f"📂 Sitemap index encontrado com {len(sitemap_data['sitemaps'])} sitemaps")
+            insights.append(f"📂 Sitemap index encontrado com {len(sitemap_data['sitemaps'])} sitemaps vinculados")
+            
+            # Analisar todos os sitemaps vinculados
+            all_urls = get_all_sitemap_urls(sitemap_data)
+            if all_urls:
+                insights.append(f"🌐 Total de URLs em todos os sitemaps: {len(all_urls)}")
+                
+                # Adicionar análise agregada
+                priorities = [float(url['priority']) for url in all_urls if url.get('priority')]
+                if priorities:
+                    avg_priority = sum(priorities) / len(priorities)
+                    insights.append(f"⚖️ Prioridade média combinada: {avg_priority:.2f}")
     
     return recommendations, warnings, insights
 
@@ -228,20 +266,17 @@ if url_input:
                     with col2:
                         st.markdown("### 🔍 Insights")
                         
-                        # User agents
                         st.markdown("**Agentes de usuário definidos:**")
                         for ua in robots_data['user_agents']:
                             st.write(f"- `{ua}`")
                         
-                        # Disallowed
                         if robots_data['disallowed']:
                             st.markdown("**Caminhos bloqueados:**")
-                            for path in robots_data['disallowed'][:10]:  # Mostrar apenas os 10 primeiros
+                            for path in robots_data['disallowed'][:10]:
                                 st.write(f"- `{path}`")
                             if len(robots_data['disallowed']) > 10:
                                 st.write(f"... e mais {len(robots_data['disallowed']) - 10} caminhos")
                         
-                        # Sitemaps
                         if robots_data['sitemaps']:
                             st.markdown("**Sitemaps encontrados:**")
                             for sitemap in robots_data['sitemaps']:
@@ -257,11 +292,9 @@ if url_input:
             # Tentar encontrar o sitemap
             sitemap_urls = []
             
-            # 1. Verificar se há sitemap no robots.txt
             if robots_data and robots_data['sitemaps']:
                 sitemap_urls = robots_data['sitemaps']
             else:
-                # 2. Tentar URLs padrão
                 common_sitemaps = [
                     '/sitemap.xml',
                     '/sitemap_index.xml',
@@ -277,7 +310,7 @@ if url_input:
             for sitemap_url in sitemap_urls:
                 sitemap_content = fetch_sitemap(sitemap_url)
                 if sitemap_content:
-                    sitemap_data = parse_sitemap(sitemap_content)
+                    sitemap_data = parse_sitemap(sitemap_content, sitemap_url)
                     if sitemap_data:
                         st.success(f"Sitemap encontrado em: [{sitemap_url}]({sitemap_url})")
                         break
@@ -286,34 +319,51 @@ if url_input:
                 if sitemap_data['type'] == 'regular':
                     st.markdown(f"**Tipo:** Sitemap regular com {len(sitemap_data['urls'])} URLs")
                     
-                    # Mostrar algumas URLs como exemplo
                     st.markdown("**Algumas URLs do sitemap:**")
-                    sample_urls = sitemap_data['urls'][:5]  # Mostrar apenas 5 como exemplo
+                    sample_urls = sitemap_data['urls'][:5]
                     for url in sample_urls:
                         st.write(f"- [{url['loc']}]({url['loc']})")
                     if len(sitemap_data['urls']) > 5:
                         st.write(f"... e mais {len(sitemap_data['urls']) - 5} URLs")
                     
-                    # Criar dataframe para análise
                     df = pd.DataFrame(sitemap_data['urls'])
                     
-                    # Análise de prioridades
                     if 'priority' in df.columns and not df['priority'].isnull().all():
                         st.markdown("**Distribuição de prioridades:**")
                         st.bar_chart(df['priority'].value_counts())
                     
-                    # Análise de changefreq
                     if 'changefreq' in df.columns and not df['changefreq'].isnull().all():
                         st.markdown("**Frequência de alterações:**")
                         st.bar_chart(df['changefreq'].value_counts())
                 
                 elif sitemap_data['type'] == 'index':
-                    st.markdown(f"**Tipo:** Sitemap index com {len(sitemap_data['sitemaps'])} sitemaps")
+                    st.markdown(f"**Tipo:** Sitemap index com {len(sitemap_data['sitemaps'])} sitemaps vinculados")
                     st.markdown("**Sitemaps listados:**")
-                    for sitemap in sitemap_data['sitemaps'][:5]:  # Mostrar apenas 5 como exemplo
+                    for sitemap in sitemap_data['sitemaps'][:5]:
                         st.write(f"- [{sitemap}]({sitemap})")
                     if len(sitemap_data['sitemaps']) > 5:
                         st.write(f"... e mais {len(sitemap_data['sitemaps']) - 5} sitemaps")
+                    
+                    # Mostrar análise combinada dos sitemaps vinculados
+                    with st.expander("🔍 Ver análise detalhada de todos os sitemaps"):
+                        all_urls = get_all_sitemap_urls(sitemap_data)
+                        if all_urls:
+                            st.markdown(f"**Total de URLs encontradas em todos os sitemaps:** {len(all_urls)}")
+                            
+                            # Criar dataframe combinado
+                            combined_df = pd.DataFrame(all_urls)
+                            
+                            if 'priority' in combined_df.columns and not combined_df['priority'].isnull().all():
+                                st.markdown("**Distribuição combinada de prioridades:**")
+                                st.bar_chart(combined_df['priority'].value_counts())
+                            
+                            if 'lastmod' in combined_df.columns and not combined_df['lastmod'].isnull().all():
+                                try:
+                                    combined_df['lastmod_date'] = pd.to_datetime(combined_df['lastmod'])
+                                    st.markdown("**Distribuição temporal das atualizações:**")
+                                    st.line_chart(combined_df['lastmod_date'].value_counts().sort_index())
+                                except:
+                                    pass
             else:
                 st.warning("Não foi possível encontrar ou analisar nenhum sitemap")
             
@@ -347,6 +397,6 @@ st.markdown("---")
 st.markdown("""
 **Como usar:**
 1. Insira a URL completa do site (com http:// ou https://)
-2. O sistema irá buscar e analisar automaticamente o robots.txt e sitemap.xml
-3. Revise os insights e recomendações para otimização de SEO
+2. O sistema buscará robots.txt e sitemap.xml (incluindo sitemaps indexados)
+3. Revise os insights e recomendações para otimização
 """)
